@@ -699,39 +699,54 @@ public class NamedEntityClassifier {
 			  
 			  if(tag.equals(previousTag)){
 				  // Probability of word (Non-first-word bigrams)
-				  String key = tag + " " + wv2.toString();
-				  double c_t1wv2 = t1wv2.getCounter(key).totalCount();
-				  double p_wv1_given_t1wv2 = 0.0;
-				  if(c_t1wv2 > 0) p_wv1_given_t1wv2 += t1wv2.getCount(key, wv1.toString())/c_t1wv2;
-				  
-				  logScore = Math.log(p_wv1_given_t1wv2);
+				  logScore = Math.log(nonFirstWordBigram(wv1, wv2, tag));
 				  
 			  } else {
 				  
 				  // Probability of transition (Name-Class bigrams)
 				  if(previousTag == START_TAG) previousWord = END_WORD;
-				  double p_t1_given_t2w2 = nameClassBigram(tag, previousTag, previousWord);
+				  logScore = nameClassBigram(tag, previousTag, previousWord);
 				  
 				  // Probability of word (First-word bigrams)
-				  String bigram = makeNGramString(Arrays.asList(tag, previousTag));
-				  double c_t1t2 = nGramsCount.getCounter(bigram).totalCount();
-				  double p_wv1_given_t1t2 = 0.0;
-				  if(c_t1t2 > 0) p_wv1_given_t1t2 += wVnG.getCount(wv1, bigram)/c_t1t2;
+				  logScore += firstWordBigram(wv1, tag, previousTag);
 				  
 				  // Probability that last word was end word (Non-first-word bigrams)
 				  WordVec wvE = new WordVec(END_WORD, false);
-				  String key = previousTag + " " + wv2.toString();
-				  double c_t2wv2 = t1wv2.getCounter(key).totalCount();
-				  double p_wvE_given_t2wv2 = 0.0;
-				  if(c_t2wv2 > 0) p_wvE_given_t2wv2 += t1wv2.getCount(key, wvE.toString())/c_t2wv2;
-				  
-				  logScore = Math.log(p_t1_given_t2w2) + Math.log(p_wv1_given_t1t2) + Math.log(p_wvE_given_t2wv2);
+//				  if(previousTag != START_TAG && previousTag != STOP_TAG)
+				  logScore += nonFirstWordBigram(wvE, wv2, previousTag);				  
 			  }
 			  
 			  logScoreCounter.setCount(tag, logScore);
 		  }
 		  
 		  return logScoreCounter;
+	  }
+	  
+	  private double firstWordBigram(WordVec wv1, String tag, String previousTag){
+		  String bigram = makeNGramString(Arrays.asList(tag, previousTag));
+		  double c_t1t2 = nGramsCount.getCounter(bigram).totalCount();
+		  double p_wv1_given_t1t2 = 0.0;
+		  if(c_t1t2 > 0) p_wv1_given_t1t2 += wVnG.getCount(wv1, bigram)/c_t1t2;
+		  
+		  return Math.log(p_wv1_given_t1t2);
+	  }
+	  
+	  private double nonFirstWordBigram(WordVec wv1, WordVec wv2, String tag){
+		  String key = tag + " " + wv2.toString();
+		  double c_t1wv2 = t1wv2.getCounter(key).totalCount();
+		  double p_wv1_given_t1wv2 = 0.0;
+		  if(c_t1wv2 > 0) p_wv1_given_t1wv2 += t1wv2.getCount(key, wv1.toString())/c_t1wv2;
+		  
+		  // Backoff 1
+		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
+		  double lambda = (1 - c_t1wv2/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  if(c_t1 > 0) p_wv1_given_t1wv2 += lambda*wVnG.getCount(wv1, tag)/c_t1;
+
+		  // Backoff 2
+		  // TODO This isn't correct
+//		  if(c_t1 > 0) p_wv1_given_t1wv2 += wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
+		  
+		  return Math.log(p_wv1_given_t1wv2);
 	  }
 	  
 	  private double nameClassBigram(String tag, String previousTag, String previousWord){
@@ -752,7 +767,7 @@ public class NamedEntityClassifier {
 //		  lambda = (1 - c_t2/c_t2)*(1/(1+(nGramsCount.getCounter(previousTag).size()/c_t2)));
 //		  
 //		  
-		  return p_t1_given_t2w2;
+		  return Math.log(p_t1_given_t2w2);
 	  }
 	  
 	  private String makeNGramString(List<String> tags) {
@@ -764,16 +779,14 @@ public class NamedEntityClassifier {
 	  }
 	  
 	  CounterMap<String, String> wordsToTags = new CounterMap<String, String>();
-	  CounterMap<String, String> lowSuffixesToTags = new CounterMap<String, String>();
-	  CounterMap<String, String> capSuffixesToTags = new CounterMap<String, String>();
 	  CounterMap<WordVec, String> wVnG = new CounterMap<WordVec, String>();
 
 	  Counter<String> wordCount = new Counter<String>();
-//	  Counter<String> trigramsCount = new Counter<String>();
-//	  Counter<String> bigramsCount = new Counter<String>();
 	  CounterMap<String, String> nGramsCount = new CounterMap<String, String>();
 	  CounterMap<String, String> t2w2 = new CounterMap<String, String>();
 	  CounterMap<String, String> t1wv2 = new CounterMap<String, String>();
+	  CounterMap<String, WordVec.Feature> tagsToFeatures = new CounterMap<String, WordVec.Feature>();
+	  
 	  
 	  public void train(List<LabeledLocalNGramContext> labeledLocalNGramContexts) {
 		  int halfSize = Math.round(labeledLocalNGramContexts.size()/2);
@@ -818,6 +831,7 @@ public class NamedEntityClassifier {
 			  wordCount.incrementCount(word, 1.0);
 			  nGramsCount.incrementCount(tag, word, 1.0);
 			  nGramsCount.incrementCount(bigram, word, 1.0);
+			  tagsToFeatures.incrementCount(tag, wv1.feature, 1.0);
 
 			  // TODO account for counting in first position of nGram
 			  if(position == 0){
@@ -832,54 +846,13 @@ public class NamedEntityClassifier {
 				  wordCount.incrementCount(word, 1.0);
 				  nGramsCount.incrementCount(tag, word, 1.0);
 				  nGramsCount.incrementCount(bigram, word, 1.0);
+				  tagsToFeatures.incrementCount(tag, wv1.feature, 1.0);
 				  
 				  previousWord = END_WORD; // For Equation 3.6
 				  wordsToTags.incrementCount(previousWord, previousTag, 1.0);
 			  }		  			  
 		  }
-		  		    
-		  // TODO Need to implement paper's smoothing
-		  // Smoothing
-//		  int smoothCount = 1;
-//		  for (String tag1: unigramsCount.keySet()){
-//			  unigramsCount.incrementCount(tag1, smoothCount);
-//			  for (String tag2: unigramsCount.keySet()){
-//				  // Smoothing for bigrams
-//				  String bigram = makeNGramString(Arrays.asList(tag1, tag2));
-//				  bigramsCount.incrementCount(bigram, smoothCount);
-//			  }
-//		  }
-		  		  
-//		  // Determine weights for Interpolation
-//		  // http://www.coli.uni-saarland.de/~thorsten/publications/Brants-ANLP00.pdf
-//		  for (String trigram: trigramsCount.keySet()){
-//			  double f012 = trigramsCount.getCount(trigram);
-//			  String tags[] = trigram.split(" ");
-//			  String b01 = makeBigramString(tags[0], tags[1]);
-//			  String b12 = makeBigramString(tags[1], tags[2]);
-//			  double a = (f012-1.0)/(bigramsCount.getCount(b01)-1.0);
-//			  double b = (bigramsCount.getCount(b12)-1.0)/(unigramsCount.getCount(tags[1])-1.0);
-//			  double c = (unigramsCount.getCount(tags[2])-1.0)/(wordsToTags.totalCount()-1.0);
-//
-//			  if(a > b && a > c){
-//				  interpWeights [2] += f012; 
-//			  } else if (b > c) {
-//				  interpWeights [1] += f012; 
-//			  } else {
-//				  interpWeights [0] += f012; 
-//			  }
-//		  }
-//		  double len = interpWeights[0] + interpWeights[1] + interpWeights[2];
-//		  for(int i=0; i<interpWeights.length; i++){ interpWeights[i] /= len; }
-//		  System.out.printf("Interpolation weights: %.3f %.3f %.3f \n", interpWeights[0], interpWeights[1], interpWeights[2]);
-		  
-		  // Normalize
-//		  wordCount = Counters.normalize(wordCount);
-//		  wordsToTags = Counters.conditionalNormalize(wordsToTags);
-//		  lowSuffixesToTags = Counters.conditionalNormalize(lowSuffixesToTags);
-//		  capSuffixesToTags = Counters.conditionalNormalize(capSuffixesToTags);
-//		  unknownWordTags = Counters.normalize(unknownWordTags);
-	
+		  System.out.println();
 	  }
 
 	  public void validate(List<LabeledLocalNGramContext> localNGramContexts) {
@@ -962,6 +935,58 @@ public class NamedEntityClassifier {
 		  result = 29 * result + (feature.toString() != null ? feature.toString().hashCode() : 0);
 		  return result;
 	  }
+  }
+  
+  private static void labelTestDoc(NETagger neTagger, String corpus, String path, String outpath) throws IOException{
+	  BufferedReader br = new BufferedReader(new FileReader(path));
+	  BufferedWriter bw = new BufferedWriter(new FileWriter(outpath));
+
+	  Pattern splitPattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
+	  Pattern tagPattern = Pattern.compile("(<.+?>)", Pattern.DOTALL);
+	  
+	  String line = null;  
+	  String newLine = null;
+      String lastTag = null;
+
+	  while ((line = br.readLine()) != null) {
+		  Matcher split = splitPattern.matcher(line);
+		  newLine = "";
+		  lastTag = START_TAG;
+		  while(split.find()){
+			  if(lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+lastTag+">");
+
+			  String subLine = split.group(0);
+			  if(tagPattern.matcher(subLine).find()) newLine += subLine;
+			  else {
+				  List<String> words = new ArrayList<String>(Arrays.asList(subLine.trim().split(" ")));
+			      List<String> boundedWords = new BoundedList<String>(words, START_WORD, STOP_WORD);
+			      List<String> tags = neTagger.tag(boundedWords);
+			      List<String> docWords = new ArrayList<String>();
+			      
+			      for(int i = 0; i < tags.size(); i++){
+			    	  String tag = tags.get(i);
+			    	  if(tag != lastTag){
+			    		  if(lastTag != NAN_TAG && lastTag != START_TAG) docWords.add("</"+lastTag+">");
+			    		  if(tag != NAN_TAG) docWords.add("<"+tag+">");
+			    	  } 
+				    	 
+			    	  docWords.add(words.get(i));
+			    	  lastTag = tag;
+			      }
+			      
+			      for(String word: docWords){
+			    	  newLine += (word + " ");
+			      }
+			  }
+		  } 
+		  
+		  if(newLine.isEmpty()) newLine = line;
+		  bw.write(newLine);
+		  bw.newLine();
+	  } 
+
+	  br.close();
+	  bw.close();
   }
   
 
@@ -1175,9 +1200,9 @@ public class NamedEntityClassifier {
     List<TaggedSentence> trainTaggedSentences = readTaggedSentences(corpus, basePath + trainFile);
     Set<String> trainingVocabulary = extractVocabulary(trainTaggedSentences);
     System.out.println("done.");
-    System.out.print("Loading test sentences...");
-    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testFile);
-    System.out.println("done.");
+//    System.out.print("Loading test sentences...");
+//    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testFile);
+//    System.out.println("done.");
 
     // Construct tagger components
     LocalNGramScorer localNGramScorer;
@@ -1196,7 +1221,12 @@ public class NamedEntityClassifier {
     neTagger.train(trainTaggedSentences);
 
     // Test tagger
-    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
+//    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
+    try {
+		labelTestDoc(neTagger, corpus, "../muc6/data/texts/NE-CO.dryrun.txt", "../muc6/data/texts/NE-CO-tagged.dryrun.txt");
+	} catch (IOException e) {
+		e.printStackTrace();
+	}
     System.out.println("Complete");
   }
 }
