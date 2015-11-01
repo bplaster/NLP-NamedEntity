@@ -52,7 +52,7 @@ public class NamedEntityClassifier {
 		  Pattern txtPattern = Pattern.compile("<TXT>(.+?)</TXT>", Pattern.DOTALL);
 		  Matcher txtMatcher = txtPattern.matcher(fullDoc);
 		  Pattern senPattern = Pattern.compile("<s>(.+?)</s>", Pattern.DOTALL);
-		  Pattern nePattern = Pattern.compile("<.+?>(.+?)</.+?>|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S)", Pattern.DOTALL);
+		  Pattern nePattern = Pattern.compile("<.+?>(.+?)</.+?>|([\"$%])|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)", Pattern.DOTALL);
 		  Pattern neTagPattern = Pattern.compile("\"(\\w+)\"");
 		  
 		  if(txtMatcher.find()){
@@ -73,7 +73,7 @@ public class NamedEntityClassifier {
 					  } else {
 						  Matcher neTagMatcher = neTagPattern.matcher(neMatcher.group(0));
 						  if(neTagMatcher.find()){
-							  String[] words = neMatcher.group(1).split(" ");
+							  String[] words = neMatcher.group(1).trim().split(" ");
 							  for(String word : words){
 								  wordArray.add(word);
 								  tagArray.add(neTagMatcher.group(1));
@@ -655,11 +655,6 @@ public class NamedEntityClassifier {
 	  
 	  int nGrams;
 	  boolean restrictNGrams; // if true, assign log score of Double.NEGATIVE_INFINITY to illegal tag NGrams.
-	    
-	  int suffixMaxLength = 10;
-
-//	  double suffixWeights[] = new double[suffixMaxLength];
-	  double interpWeights[] = {0.0,0.0,0.0};
 	  
 	  public void setNGrams(int nGrams){
 		  this.nGrams = nGrams;
@@ -667,10 +662,6 @@ public class NamedEntityClassifier {
 	  
 	  public int getNGrams(){
 		  return nGrams;
-	  }
-	  	  
-	  public int getHistorySize() {
-		  return 2;
 	  }
 	    
 	  public Counter<String> getLogScoreCounter(LocalNGramContext localNGramContext) {
@@ -691,7 +682,6 @@ public class NamedEntityClassifier {
 		  WordVec wv1 = new WordVec(word, isWordFirstWord);
 		  WordVec wv2 = new WordVec(previousWord, isPreviousWordFirstWord);
 
-//		  Set<String> allowedFollowingTags = allowedFollowingTags(tagCounter.keySet(), localNGramContext.getPreviousTags());
 		  Counter<String> logScoreCounter = new Counter<String>();
 		  	
 		  for (String tag : tagCounter.keySet()) {
@@ -699,7 +689,7 @@ public class NamedEntityClassifier {
 			  
 			  if(tag.equals(previousTag)){
 				  // Probability of word (Non-first-word bigrams)
-				  logScore = Math.log(nonFirstWordBigram(wv1, wv2, tag));
+				  logScore = nonFirstWordBigram(wv1, wv2, tag);
 				  
 			  } else {
 				  
@@ -817,7 +807,7 @@ public class NamedEntityClassifier {
 			  
 			  // Deal with +end+ word
 			  if(tag != previousTag){
-				  t2w2.incrementCount(previousTag + " " + END_WORD, previousTag, 1.0);
+				  t2w2.incrementCount(previousTag + " " + END_WORD, tag, 1.0);
 				  WordVec wvE = new WordVec(END_WORD, false);
 				  t1wv2.incrementCount(previousTag + " " + wv2.toString(), wvE.toString(), 1.0);
 			  }
@@ -852,7 +842,6 @@ public class NamedEntityClassifier {
 				  wordsToTags.incrementCount(previousWord, previousTag, 1.0);
 			  }		  			  
 		  }
-		  System.out.println();
 	  }
 
 	  public void validate(List<LabeledLocalNGramContext> localNGramContexts) {
@@ -941,7 +930,8 @@ public class NamedEntityClassifier {
 	  BufferedReader br = new BufferedReader(new FileReader(path));
 	  BufferedWriter bw = new BufferedWriter(new FileWriter(outpath));
 
-	  Pattern splitPattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
+	  Pattern wordPattern = Pattern.compile("('s)|([^'.\\s]+)|([.])", Pattern.DOTALL);
+	  Pattern sentencePattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
 	  Pattern tagPattern = Pattern.compile("(<.+?>)", Pattern.DOTALL);
 	  
 	  String line = null;  
@@ -949,7 +939,7 @@ public class NamedEntityClassifier {
       String lastTag = null;
 
 	  while ((line = br.readLine()) != null) {
-		  Matcher split = splitPattern.matcher(line);
+		  Matcher split = sentencePattern.matcher(line);
 		  newLine = "";
 		  lastTag = START_TAG;
 		  while(split.find()){
@@ -958,16 +948,21 @@ public class NamedEntityClassifier {
 			  String subLine = split.group(0);
 			  if(tagPattern.matcher(subLine).find()) newLine += subLine;
 			  else {
-				  List<String> words = new ArrayList<String>(Arrays.asList(subLine.trim().split(" ")));
+				  Matcher wordSplit = wordPattern.matcher(subLine);
+				  List<String> words = new ArrayList<String>();
+				  while(wordSplit.find()){
+					  words.add(wordSplit.group(0));
+				  }
 			      List<String> boundedWords = new BoundedList<String>(words, START_WORD, STOP_WORD);
 			      List<String> tags = neTagger.tag(boundedWords);
 			      List<String> docWords = new ArrayList<String>();
 			      
 			      for(int i = 0; i < tags.size(); i++){
 			    	  String tag = tags.get(i);
-			    	  if(tag != lastTag){
-			    		  if(lastTag != NAN_TAG && lastTag != START_TAG) docWords.add("</"+lastTag+">");
-			    		  if(tag != NAN_TAG) docWords.add("<"+tag+">");
+			    	  if(!tag.equals(lastTag)){
+			    		  String tagType = "EX";
+			    		  if(lastTag != NAN_TAG && lastTag != START_TAG) docWords.add("</"+tagType+">");
+			    		  if(tag != NAN_TAG) docWords.add("<" + tagType + " TYPE=\""+tag+"\">");
 			    	  } 
 				    	 
 			    	  docWords.add(words.get(i));
@@ -987,6 +982,9 @@ public class NamedEntityClassifier {
 
 	  br.close();
 	  bw.close();
+	  
+	  System.out.println("File written to: " + outpath);
+
   }
   
 
@@ -1200,9 +1198,9 @@ public class NamedEntityClassifier {
     List<TaggedSentence> trainTaggedSentences = readTaggedSentences(corpus, basePath + trainFile);
     Set<String> trainingVocabulary = extractVocabulary(trainTaggedSentences);
     System.out.println("done.");
-//    System.out.print("Loading test sentences...");
-//    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testFile);
-//    System.out.println("done.");
+    System.out.print("Loading test sentences...");
+    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testFile);
+    System.out.println("done.");
 
     // Construct tagger components
     LocalNGramScorer localNGramScorer;
@@ -1221,12 +1219,12 @@ public class NamedEntityClassifier {
     neTagger.train(trainTaggedSentences);
 
     // Test tagger
-//    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
     try {
 		labelTestDoc(neTagger, corpus, "../muc6/data/texts/NE-CO.dryrun.txt", "../muc6/data/texts/NE-CO-tagged.dryrun.txt");
 	} catch (IOException e) {
 		e.printStackTrace();
 	}
-    System.out.println("Complete");
+    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
+
   }
 }
