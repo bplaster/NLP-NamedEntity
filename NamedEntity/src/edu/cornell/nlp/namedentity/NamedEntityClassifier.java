@@ -7,6 +7,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.io.*;
 
+import com.aliasi.chunk.Chunk;
+import com.aliasi.chunk.Chunking;
+import com.aliasi.chunk.ChunkingEvaluation;
+
+import com.aliasi.corpus.ObjectHandler;
+import com.aliasi.corpus.Parser;
+import com.aliasi.corpus.parsers.*;
 
 /**
  * @author Brandon Plaster (Template: Dan Klein)
@@ -56,7 +63,7 @@ public class NamedEntityClassifier {
 		  Pattern txtPattern = Pattern.compile("<TXT>(.+?)</TXT>", Pattern.DOTALL);
 		  Matcher txtMatcher = txtPattern.matcher(fullDoc);
 		  Pattern senPattern = Pattern.compile("<s>(.+?)</s>", Pattern.DOTALL);
-		  Pattern nePattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
+		  Pattern l1_Pattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
 		  Pattern neTagPattern = Pattern.compile("\"(\\w+)\"");
 		  
 		  if(txtMatcher.find()){
@@ -67,17 +74,17 @@ public class NamedEntityClassifier {
 			  
 			  // Iterate over sentences
 			  while(senMatcher.find()){
-				  Matcher neMatcher = nePattern.matcher(senMatcher.group(1));
+				  Matcher l1_Matcher = l1_Pattern.matcher(senMatcher.group(1));
 
 				  // Iterate over words
-				  while(neMatcher.find()){
-					  if(neMatcher.group(1) == null){
-						  wordArray.add(neMatcher.group(0));
+				  while(l1_Matcher.find()){
+					  if(l1_Matcher.group(1) == null){
+						  wordArray.add(l1_Matcher.group(0));
 						  tagArray.add(NAN_TAG);
 					  } else {
-						  Matcher neTagMatcher = neTagPattern.matcher(neMatcher.group(0));
+						  Matcher neTagMatcher = neTagPattern.matcher(l1_Matcher.group(0));
 						  if(neTagMatcher.find()){
-							  String[] words = neMatcher.group(1).trim().split(" ");
+							  String[] words = l1_Matcher.group(1).trim().split(" ");
 							  for(String word : words){
 								  wordArray.add(word);
 								  tagArray.add(neTagMatcher.group(1));
@@ -727,19 +734,19 @@ public class NamedEntityClassifier {
 		  
 		  // Back off 1
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda2 = (1 - c_t1wvB/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
-		  p_wv1_given_t1t2 += (1-lambda1)*lambda2*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
+		  double lambda2 = (1-lambda1)*(1 - c_t1wvB/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  p_wv1_given_t1t2 += lambda2*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
 		  
 		  // Back off 2
-		  double lambda3 = (1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
-		  p_wv1_given_t1t2 += (1 - lambda2)*lambda3*wVnG.getCount(wv1, tag)/c_t1;
+		  double lambda3 = (1 - lambda2)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  p_wv1_given_t1t2 += lambda3*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 3
-		  double lambda4 = 1.0; // TODO This isn't correct
-		  p_wv1_given_t1t2 += (1 - lambda3)*lambda4*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
+		  double lambda4 = (1 - lambda3)*0.5; // TODO This isn't correct
+		  p_wv1_given_t1t2 += lambda4*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
 		  // Back off 4
-		  p_wv1_given_t1t2 += (1 - lambda4)*1/(wordCount.size()*featureCount);
+		  p_wv1_given_t1t2 += (1 - lambda4)/(wordCount.size()*featureCount);
 		  
 		  return Math.log(p_wv1_given_t1t2);
 	  }
@@ -754,15 +761,15 @@ public class NamedEntityClassifier {
 		  p_wv1_given_t1wv2 += lambda1*t1wv2_to_wv1.getCount(key, wv1.toString())/c_t1wv2;
 		  
 		  // Back off 1
-		  double lambda2 = (1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
-		  p_wv1_given_t1wv2 += (1 - lambda1)*lambda2*wVnG.getCount(wv1, tag)/c_t1;
+		  double lambda2 = (1 - lambda1)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  p_wv1_given_t1wv2 += lambda2*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 2
-		  double lambda3 = 1.0; // TODO This isn't correct
-		  p_wv1_given_t1wv2 += (1 - lambda2)*lambda3*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
+		  double lambda3 = (1 - lambda2)*0.5; // TODO this needs to be fixed
+		  p_wv1_given_t1wv2 += lambda3*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
 		  // Back off 3
-		  p_wv1_given_t1wv2 += (1 - lambda3)*1/(wordCount.size()*featureCount);
+		  p_wv1_given_t1wv2 += (1 - lambda3)/(wordCount.size()*featureCount);
 		  
 		  return Math.log(p_wv1_given_t1wv2);
 	  }
@@ -778,16 +785,16 @@ public class NamedEntityClassifier {
 		  p_t1_given_t2w2 += lambda1*t2w2_to_t1.getCount(key_t2w2,tag)/c_t2w2;
 
 		  // Back off 1
-		  double lambda2 = (1 - c_t2/totalCount)*(1/(1+(ncCount/totalCount)));
-		  p_t1_given_t2w2 += (1 - lambda1)*lambda2*nGramsCount.getCounter(bigram).totalCount()/c_t2;
+		  double lambda2 = (1 - lambda1)*(1 - c_t2/totalCount)*(1/(1+(ncCount/totalCount)));
+		  p_t1_given_t2w2 += lambda2*nGramsCount.getCounter(bigram).totalCount()/c_t2;
 		  
 		  // Back off 2
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda3 = 1.0; // TODO this needs to be fixed
-		  p_t1_given_t2w2 += (1 - lambda2)*lambda3*c_t1/totalCount;
+		  double lambda3 = (1 - lambda2)*0.5; // TODO this needs to be fixed
+		  p_t1_given_t2w2 += lambda3*c_t1/totalCount;
 		  
 		  // Back off 3
-		  p_t1_given_t2w2 += (1 - lambda3)*(1/ncCount);
+		  p_t1_given_t2w2 += (1 - lambda3)/ncCount;
 		   
 		  return Math.log(p_t1_given_t2w2);
 	  }
@@ -990,6 +997,7 @@ public class NamedEntityClassifier {
 	  String line = null;  
 	  String newLine = null;
       String lastTag = null;
+      boolean writeStarted = false;
 
 	  while ((line = br.readLine()) != null) {
 		  Matcher split = sentencePattern.matcher(line);
@@ -997,7 +1005,7 @@ public class NamedEntityClassifier {
 		  lastTag = START_TAG;
 		  boolean endedWithoutTag = false;
 		  while(split.find()){
-			  if(lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+lastTag+">");
+			  if(lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+getTypeForTag(lastTag)+">");
 
 			  String subLine = split.group(0);
 			  if(tagPattern.matcher(subLine).find()) { 
@@ -1044,12 +1052,13 @@ public class NamedEntityClassifier {
 			      }
 			  }
 		  } 
-		  if(endedWithoutTag && lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+lastTag+">");
+		  if(endedWithoutTag && lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+getTypeForTag(lastTag)+">");
 
 		  
 		  if(newLine.isEmpty()) newLine = line;
+		  if(writeStarted) bw.newLine();
+		  else writeStarted = true;
 		  bw.write(newLine);
-		  bw.newLine();
 	  } 
 
 	  br.close();
@@ -1224,14 +1233,14 @@ public class NamedEntityClassifier {
     return vocabulary;
   }
 
-  public static void main(String[] args) {
+  public static void main(String[] args) throws IOException {
     // Parse command line flags and arguments
     Map<String, String> argMap = CommandLineUtils.simpleCommandLineParser(args);
 
     // Set up default parameters and settings
     String basePath = ".";
     String trainFile = "dryrun-trng.NE-combined.key.v1.3.clean";
-    String testFile = "dryrun-test.NE.key.02may95";
+    String testFile = "";
     boolean verbose = false;
     String corpus = "muc6";
 
@@ -1251,11 +1260,14 @@ public class NamedEntityClassifier {
     	if(corpus.equals("muc6")){
 	        switch(argMap.get("-test").toLowerCase()) {
 	        case "formal":
-	        	testFile = "formal-tst.NE.key.04oct95";
+	        	testFile = "ne-co.formal.test.texts";
 	        	break;
 	        case "dryrun":
-	        	testFile = "dryrun-test.NE.key.02may95";
+	        	testFile = "NE-CO.dryrun-single";
 	        	break;
+	        default:
+		        testFile = "NE-CO.dryrun";
+
 	        }
 	    }
     }
@@ -1264,14 +1276,19 @@ public class NamedEntityClassifier {
     if (argMap.containsKey("-verbose")) {
       verbose = true;
     }
+    
+    String testKeyFile = "dryrun-test.NE.key.02may95-single.txt";
+    String testFilePath = basePath + "texts/" + testFile + ".txt";
+    String taggedFilePath = basePath + "texts/" + testFile + "-tagged.txt";
+    String keyFilePath = basePath + "keys/" + testKeyFile + ".txt";
 
     // Read in data
     System.out.print("Loading training sentences...");
     List<TaggedSentence> trainTaggedSentences = readTaggedSentences(corpus, basePath + trainFile);
     Set<String> trainingVocabulary = extractVocabulary(trainTaggedSentences);
     System.out.println("done.");
-    System.out.print("Loading test sentences...");
-    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testFile);
+    System.out.print("Loading tagged test sentences...");
+    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testKeyFile);
     System.out.println("done.");
 
     // Construct tagger components
@@ -1292,11 +1309,20 @@ public class NamedEntityClassifier {
 
     // Test tagger
     try {
-		labelTestDoc(neTagger, corpus, "../muc6/data/texts/NE-CO.dryrun.txt", "../muc6/data/texts/NE-CO-tagged.dryrun.txt");
+		labelTestDoc(neTagger, corpus, testFilePath, taggedFilePath);
 	} catch (IOException e) {
 		e.printStackTrace();
 	}
     evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
+    
+//    @SuppressWarnings("deprecation")
+//	Parser<ObjectHandler<Chunking>> parser = new  Muc6ChunkParser();
+//    FileScorer scorer = new FileScorer(parser);
+//    File refFile = new File(keyFilePath);
+//    File responseFile = new File(taggedFilePath);
+//    scorer.score(refFile,responseFile);
+//
+//    System.out.println(scorer.evaluation().toString());
 
   }
 }
