@@ -1,19 +1,15 @@
 package edu.cornell.nlp.namedentity;
 
 import edu.berkeley.nlp.util.*;
+import edu.cornell.nlp.namedentity.FileScorer;
 
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.io.*;
 
-import com.aliasi.chunk.Chunk;
 import com.aliasi.chunk.Chunking;
-import com.aliasi.chunk.ChunkingEvaluation;
-
-import com.aliasi.corpus.ObjectHandler;
-import com.aliasi.corpus.Parser;
-import com.aliasi.corpus.parsers.*;
+import com.aliasi.corpus.*;
 
 /**
  * @author Brandon Plaster (Template: Dan Klein)
@@ -31,7 +27,8 @@ public class NamedEntityClassifier {
   
   static final String NEPATTERN = "<.+?>(.+?)</.+?>|([\"$%])|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)";
   static final String L1_PATTERN = "<.+?>(.+?)</.+?>|(\\S+)";
-  
+  static final String L2_PATTERN = "";
+
   /** 
    * MUC Documents
    */
@@ -995,21 +992,25 @@ public class NamedEntityClassifier {
 	  Pattern endWordPattern = Pattern.compile("([.,%]|'s)", Pattern.DOTALL);
 	  
 	  String line = null;  
-	  String newLine = null;
+	  String taggedLine = null;
       String lastTag = null;
       boolean writeStarted = false;
+      List<int[]> indexList;
 
 	  while ((line = br.readLine()) != null) {
+		  indexList = new ArrayList<int[]>();
+		  
 		  Matcher split = sentencePattern.matcher(line);
-		  newLine = "";
+		  taggedLine = line;
 		  lastTag = START_TAG;
 		  boolean endedWithoutTag = false;
 		  while(split.find()){
-			  if(lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+getTypeForTag(lastTag)+">");
-
+			  
 			  String subLine = split.group(0);
+			  int startOffset = split.start();
+			  
+			  // Check if last line ends without a tag, else proceed as normal
 			  if(tagPattern.matcher(subLine).find()) { 
-				  newLine += subLine;
 				  endedWithoutTag = false;
 			  }
 			  else {
@@ -1017,48 +1018,52 @@ public class NamedEntityClassifier {
 				  Matcher wordSplit = wordPattern.matcher(subLine);
 				  List<String> words = new ArrayList<String>();
 				  while(wordSplit.find()){
+					  indexList.add(new int[]{wordSplit.start() + startOffset, wordSplit.end() + startOffset});
 					  words.add(wordSplit.group(0));
 				  }
 			      List<String> boundedWords = new BoundedList<String>(words, START_WORD, STOP_WORD);
 			      List<String> tags = neTagger.tag(boundedWords);
-			      List<String> docWords = new ArrayList<String>(); // List of words, including NE tags
-			      List<Integer> wt = new ArrayList<Integer>(); // Array dictating whether to add space before word
+			      List<Integer> insertIndex = new ArrayList<Integer>();
+			      List<String> docTags = new ArrayList<String>();
 			      
 			      for(int i = 0; i < tags.size(); i++){
 			    	  String tag = tags.get(i);
 			    	  if(!tag.equals(lastTag)){
+			    		  // First tag the end tag for the preceding word
 			    		  if(lastTag != NAN_TAG && lastTag != START_TAG) {
 				    		  String tagType = getTypeForTag(lastTag);
-			    			  docWords.add("</"+tagType+">");
-			    			  wt.add(0);
+			    			  docTags.add("</"+tagType+">");
+			    			  insertIndex.add(indexList.get(i-1)[1]);
 			    		  }
+			    		  // Then tag the start of the new tag
 			    		  if(tag != NAN_TAG) {
 				    		  String tagType = getTypeForTag(tag);
-			    			  docWords.add("<" + tagType + " TYPE=\""+tag+"\">");
-			    			  wt.add(1);
+			    			  docTags.add("<" + tagType + " TYPE=\""+tag+"\">");
+			    			  insertIndex.add(indexList.get(i)[0]);
+			    			  if(i == tags.size() - 1){
+				    			  docTags.add("</"+tagType+">");
+				    			  insertIndex.add(indexList.get(i)[1]);
+			    			  }
 			    		  }
-			    		  wt.add(0);
-			    	  } else wt.add(1);
-
-			    	  docWords.add(words.get(i));
+			    	  } 
 			    	  lastTag = tag;
 			      }
 			      
-			      for(int i = 0; i < docWords.size(); i++){
-			    	  String word = docWords.get(i);
-			    	  
-			    	  if((i==0 || (wt.get(i).equals(1) && !endWordPattern.matcher(word).find())) && !newLine.isEmpty()) newLine += " ";	
-			    	  newLine += word;
+			      // Iterate through this backwards so that the indices are valid
+			      for(int i = docTags.size()-1; i >= 0; i--){
+			    	  String word = docTags.get(i);
+			    	  int index = insertIndex.get(i);
+			    	  taggedLine = new StringBuilder(taggedLine).insert(index, word).toString();
 			      }
 			  }
-		  } 
-		  if(endedWithoutTag && lastTag != NAN_TAG && lastTag != START_TAG) newLine += ("</"+getTypeForTag(lastTag)+">");
+		  }
+		  // Case when last sentence doesn't have end tag
+		  if(endedWithoutTag && lastTag != NAN_TAG && lastTag != START_TAG) taggedLine += ("</"+getTypeForTag(lastTag)+">");
 
-		  
-		  if(newLine.isEmpty()) newLine = line;
+		  // Write to file
 		  if(writeStarted) bw.newLine();
 		  else writeStarted = true;
-		  bw.write(newLine);
+		  bw.write(taggedLine);
 	  } 
 
 	  br.close();
@@ -1182,7 +1187,7 @@ public class NamedEntityClassifier {
         if (verbose) System.out.println("WARNING: Decoder suboptimality detected.  Gold tagging has higher score than guessed tagging.");
       }
 //      System.out.println(alignedTaggings(words, goldTags, guessedTags, true));
-      if (verbose) System.out.println(alignedTaggings(words, goldTags, guessedTags, true));
+//      if (verbose) System.out.println(alignedTaggings(words, goldTags, guessedTags, true));
     }
     System.out.printf("NE Accuracy: %.3f (Tag Accuracy: %.3f) (Unknown Accuracy: %.3f) Decoder Suboptimalities Detected: %d\n", numNETagsCorrect/numNETags, numTagsCorrect / numTags, numUnknownWordsCorrect / numUnknownWords, numDecodingInversions);
   }
@@ -1233,14 +1238,22 @@ public class NamedEntityClassifier {
     return vocabulary;
   }
 
+  private static class ChunkingCollector implements ObjectHandler<Chunking> {
+
+	  private final List<Chunking> mChunkingList = new ArrayList<Chunking>();
+	  public void handle(Chunking chunking) {
+		  mChunkingList.add(chunking);
+	  }
+  }
+  
   public static void main(String[] args) throws IOException {
     // Parse command line flags and arguments
     Map<String, String> argMap = CommandLineUtils.simpleCommandLineParser(args);
 
     // Set up default parameters and settings
     String basePath = ".";
-    String trainFile = "dryrun-trng.NE-combined.key.v1.3.clean";
     String testFile = "";
+    String testKeyFile = "";
     boolean verbose = false;
     String corpus = "muc6";
 
@@ -1261,12 +1274,15 @@ public class NamedEntityClassifier {
 	        switch(argMap.get("-test").toLowerCase()) {
 	        case "formal":
 	        	testFile = "ne-co.formal.test.texts";
+	        	testKeyFile = "formal-tst.NE.key.04oct95";
 	        	break;
-	        case "dryrun":
+	        case "dryrun-single":
 	        	testFile = "NE-CO.dryrun-single";
+	        	testKeyFile = "dryrun-test.NE.key.02may95-single";
 	        	break;
 	        default:
 		        testFile = "NE-CO.dryrun";
+		        testKeyFile = "dryrun-test.NE.key.02may95";
 
 	        }
 	    }
@@ -1277,18 +1293,18 @@ public class NamedEntityClassifier {
       verbose = true;
     }
     
-    String testKeyFile = "dryrun-test.NE.key.02may95-single.txt";
     String testFilePath = basePath + "texts/" + testFile + ".txt";
     String taggedFilePath = basePath + "texts/" + testFile + "-tagged.txt";
     String keyFilePath = basePath + "keys/" + testKeyFile + ".txt";
+    String trainFilePath = basePath + "keys/dryrun-trng.NE-combined.key.v1.3.clean";
 
     // Read in data
     System.out.print("Loading training sentences...");
-    List<TaggedSentence> trainTaggedSentences = readTaggedSentences(corpus, basePath + trainFile);
+    List<TaggedSentence> trainTaggedSentences = readTaggedSentences(corpus, trainFilePath);
     Set<String> trainingVocabulary = extractVocabulary(trainTaggedSentences);
     System.out.println("done.");
     System.out.print("Loading tagged test sentences...");
-    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, basePath + testKeyFile);
+    List<TaggedSentence> testTaggedSentences = readTaggedSentences(corpus, keyFilePath);
     System.out.println("done.");
 
     // Construct tagger components
@@ -1313,16 +1329,18 @@ public class NamedEntityClassifier {
 	} catch (IOException e) {
 		e.printStackTrace();
 	}
-    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
-    
-//    @SuppressWarnings("deprecation")
-//	Parser<ObjectHandler<Chunking>> parser = new  Muc6ChunkParser();
-//    FileScorer scorer = new FileScorer(parser);
-//    File refFile = new File(keyFilePath);
-//    File responseFile = new File(taggedFilePath);
-//    scorer.score(refFile,responseFile);
-//
-//    System.out.println(scorer.evaluation().toString());
+        
+    // Score using lingpipe's scorer
+    File refFile = new File(keyFilePath);
+    File responseFile = new File(taggedFilePath);
+    ChunkingCollector refCollector = new ChunkingCollector();
+    @SuppressWarnings("deprecation")
+	Parser<ObjectHandler<Chunking>> parser = new  Muc6ChunkParser();
+    parser.setHandler(refCollector);
+    parser.parse(refFile);
+    FileScorer scorer = new FileScorer(parser);
+    scorer.score(refFile,responseFile);
+    System.out.println(scorer.evaluation().toString());
 
   }
 }
