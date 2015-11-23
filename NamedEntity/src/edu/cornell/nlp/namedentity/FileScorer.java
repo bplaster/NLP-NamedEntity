@@ -66,7 +66,7 @@ public class FileScorer {
 
         @SuppressWarnings("deprecation")
         Parser<ObjectHandler<Chunking>> parser 
-            = new com.aliasi.corpus.parsers.Muc6ChunkParser();
+            = new com.aliasi.corpus.Muc6ChunkParser();
         FileScorer scorer = new FileScorer(parser);
         scorer.score(refFile,responseFile);
 

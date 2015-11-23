@@ -25,7 +25,7 @@ public class NamedEntityClassifier {
   static final String BEGIN_WORD = "+begin+";
   static final String NAN_TAG = "NAN";
   
-  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([\"$%])|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)";
+  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([\"$%])|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)|(&amp;)";
   static final String L1_PATTERN = "<.+?>(.+?)</.+?>|(\\S+)";
   static final String L2_PATTERN = "";
 
@@ -1003,18 +1003,15 @@ public class NamedEntityClassifier {
 		  Matcher split = sentencePattern.matcher(line);
 		  taggedLine = line;
 		  lastTag = START_TAG;
-		  boolean endedWithoutTag = false;
+		  boolean needsEndTag = false;
 		  while(split.find()){
 			  
 			  String subLine = split.group(0);
 			  int startOffset = split.start();
 			  
 			  // Check if last line ends without a tag, else proceed as normal
-			  if(tagPattern.matcher(subLine).find()) { 
-				  endedWithoutTag = false;
-			  }
-			  else {
-				  endedWithoutTag = true;
+			  if(!tagPattern.matcher(subLine).find()) {
+				  
 				  Matcher wordSplit = wordPattern.matcher(subLine);
 				  List<String> words = new ArrayList<String>();
 				  while(wordSplit.find()){
@@ -1028,24 +1025,32 @@ public class NamedEntityClassifier {
 			      
 			      for(int i = 0; i < tags.size(); i++){
 			    	  String tag = tags.get(i);
+			    	  boolean lastIndex = (i == tags.size() - 1);
 			    	  if(!tag.equals(lastTag)){
 			    		  // First tag the end tag for the preceding word
-			    		  if(lastTag != NAN_TAG && lastTag != START_TAG) {
+			    		  if(lastTag != NAN_TAG && needsEndTag) {
+			    			  needsEndTag = false;
 				    		  String tagType = getTypeForTag(lastTag);
 			    			  docTags.add("</"+tagType+">");
 			    			  insertIndex.add(indexList.get(i-1)[1]);
 			    		  }
 			    		  // Then tag the start of the new tag
 			    		  if(tag != NAN_TAG) {
+			    			  needsEndTag = true;
 				    		  String tagType = getTypeForTag(tag);
 			    			  docTags.add("<" + tagType + " TYPE=\""+tag+"\">");
 			    			  insertIndex.add(indexList.get(i)[0]);
-			    			  if(i == tags.size() - 1){
-				    			  docTags.add("</"+tagType+">");
-				    			  insertIndex.add(indexList.get(i)[1]);
-			    			  }
 			    		  }
+			    		  
 			    	  } 
+			    	  
+			    	  if(lastIndex && needsEndTag){
+		    			  needsEndTag = false;
+		    			  String tagType = getTypeForTag(tag);
+		    			  docTags.add("</"+tagType+">");
+		    			  insertIndex.add(indexList.get(i)[1]);
+		    		  }
+			    	  
 			    	  lastTag = tag;
 			      }
 			      
@@ -1057,8 +1062,6 @@ public class NamedEntityClassifier {
 			      }
 			  }
 		  }
-		  // Case when last sentence doesn't have end tag
-		  if(endedWithoutTag && lastTag != NAN_TAG && lastTag != START_TAG) taggedLine += ("</"+getTypeForTag(lastTag)+">");
 
 		  // Write to file
 		  if(writeStarted) bw.newLine();
@@ -1281,8 +1284,8 @@ public class NamedEntityClassifier {
 	        	testKeyFile = "dryrun-test.NE.key.02may95-single";
 	        	break;
 	        default:
-		        testFile = "NE-CO.dryrun";
-		        testKeyFile = "dryrun-test.NE.key.02may95";
+		        testFile = "NE-CO.dryrun-edited";
+		        testKeyFile = "dryrun-test.NE.key.02may95-edited";
 
 	        }
 	    }
