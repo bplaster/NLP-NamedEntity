@@ -25,8 +25,9 @@ public class NamedEntityClassifier {
   static final String BEGIN_WORD = "+begin+";
   static final String NAN_TAG = "NAN";
   
-  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([\"$%])|(\\w+['-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)|(&amp;)";
-  static final String L1_PATTERN = "<.+?>(.+?)</.+?>|(\\S+)";
+//  static final String NEPATTERN = "<.+?>(.+?)</.+?>|('s)|(\\d+[:/.,-]\\S*)|([\"$%])|(\\w+[-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)";
+  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([.]+)|([{}()\"%,:?!$-])|(\\d+([:/.,-]\\d+)*)|(\\w+(?='s))|(\\w+'([a-r]|[t-z])\\w*)|('s)|(\\w+([']|[.](?!\\s*$))?)";
+//  static final String L1_PATTERN = "<.+?>(.+?)</.+?>|(\\S+)";
   static final String L2_PATTERN = "";
 
   /** 
@@ -60,7 +61,7 @@ public class NamedEntityClassifier {
 		  Pattern txtPattern = Pattern.compile("<TXT>(.+?)</TXT>", Pattern.DOTALL);
 		  Matcher txtMatcher = txtPattern.matcher(fullDoc);
 		  Pattern senPattern = Pattern.compile("<s>(.+?)</s>", Pattern.DOTALL);
-		  Pattern l1_Pattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
+		  Pattern nePattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
 		  Pattern neTagPattern = Pattern.compile("\"(\\w+)\"");
 		  
 		  if(txtMatcher.find()){
@@ -71,7 +72,7 @@ public class NamedEntityClassifier {
 			  
 			  // Iterate over sentences
 			  while(senMatcher.find()){
-				  Matcher l1_Matcher = l1_Pattern.matcher(senMatcher.group(1));
+				  Matcher l1_Matcher = nePattern.matcher(senMatcher.group(1));
 
 				  // Iterate over words
 				  while(l1_Matcher.find()){
@@ -721,77 +722,91 @@ public class NamedEntityClassifier {
 	  
 	  private double firstWordBigram(WordVec wv1, String tag, String previousTag){
 		  // Base Model
+		  double remainder = 1.0;
 		  String bigram = makeNGramString(Arrays.asList(tag, previousTag));
 		  double c_t1t2 = nGramsCount.getCounter(bigram).totalCount();
 		  double p_wv1_given_t1t2 = 0.0;
 		  WordVec wvB = new WordVec(BEGIN_WORD, false);
 		  double c_t1wvB = t1wv2_to_wv1.getCounter(tag + " " + wvB.toString()).totalCount();
 		  double lambda1 = (1 - c_t1t2/c_t1wvB)*(1/(1+(ncCount/c_t1wvB)));
+		  remainder -= lambda1;
 		  p_wv1_given_t1t2 += lambda1*wVnG.getCount(wv1, bigram)/c_t1t2;
 		  
 		  // Back off 1
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda2 = (1-lambda1)*(1 - c_t1wvB/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  double lambda2 = (remainder)*(1 - c_t1wvB/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  remainder -= lambda2;
 		  p_wv1_given_t1t2 += lambda2*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
 		  
 		  // Back off 2
-		  double lambda3 = (1 - lambda2)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  double lambda3 = (remainder)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  remainder -= lambda3;
 		  p_wv1_given_t1t2 += lambda3*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 3
-		  double lambda4 = (1 - lambda3)*0.5; // TODO This isn't correct
+		  double lambda4 = (remainder)*0.5; // TODO This isn't correct
+		  remainder -= lambda4;
 		  p_wv1_given_t1t2 += lambda4*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
 		  // Back off 4
-		  p_wv1_given_t1t2 += (1 - lambda4)/(wordCount.size()*featureCount);
+		  p_wv1_given_t1t2 += (remainder)/(wordCount.size()*featureCount);
 		  
 		  return Math.log(p_wv1_given_t1t2);
 	  }
 	  
 	  private double nonFirstWordBigram(WordVec wv1, WordVec wv2, String tag){
 		  // Base Model
+		  double remainder = 1.0;
 		  String key = tag + " " + wv2.toString();
 		  double c_t1wv2 = t1wv2_to_wv1.getCounter(key).totalCount();
 		  double p_wv1_given_t1wv2 = 0.0;
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
 		  double lambda1 = (1 - c_t1wv2/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  remainder -= lambda1;
 		  p_wv1_given_t1wv2 += lambda1*t1wv2_to_wv1.getCount(key, wv1.toString())/c_t1wv2;
 		  
 		  // Back off 1
-		  double lambda2 = (1 - lambda1)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  double lambda2 = (remainder)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  remainder -= lambda2;
 		  p_wv1_given_t1wv2 += lambda2*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 2
-		  double lambda3 = (1 - lambda2)*0.5; // TODO this needs to be fixed
+		  double lambda3 = (remainder)*0.5; // TODO this needs to be fixed
+		  remainder -= lambda3;
 		  p_wv1_given_t1wv2 += lambda3*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
 		  // Back off 3
-		  p_wv1_given_t1wv2 += (1 - lambda3)/(wordCount.size()*featureCount);
+		  p_wv1_given_t1wv2 += (remainder)/(wordCount.size()*featureCount);
 		  
 		  return Math.log(p_wv1_given_t1wv2);
 	  }
 	  
 	  private double nameClassBigram(String tag, String previousTag, String previousWord){
 		  // Base Model
+		  double remainder = 1.0;
 		  double p_t1_given_t2w2 = 0.0;
 		  String key_t2w2 = previousTag + " " + previousWord;
 		  double c_t2w2 = t2w2_to_t1.getCounter(key_t2w2).totalCount();
   		  String bigram = makeNGramString(Arrays.asList(tag, previousTag));
 		  double c_t2 = nGramsCount.getCounter(previousTag).totalCount();
-		  double lambda1 = (1 - c_t2w2/c_t2)*(1/(1+(nGramsCount.getCounter(previousTag).size()/c_t2)));
+		  double lambda1 = (1.0 - c_t2w2/c_t2)*(1/(1+(nGramsCount.getCounter(previousTag).size()/c_t2)));
+		  remainder -= lambda1;
 		  p_t1_given_t2w2 += lambda1*t2w2_to_t1.getCount(key_t2w2,tag)/c_t2w2;
 
 		  // Back off 1
-		  double lambda2 = (1 - lambda1)*(1 - c_t2/totalCount)*(1/(1+(ncCount/totalCount)));
+		  double lambda2 = (remainder)*(1.0 - c_t2/totalCount)*(1/(1+(ncCount/totalCount)));
+		  remainder -= lambda2;
 		  p_t1_given_t2w2 += lambda2*nGramsCount.getCounter(bigram).totalCount()/c_t2;
 		  
 		  // Back off 2
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda3 = (1 - lambda2)*0.5; // TODO this needs to be fixed
+		  double lambda3 = (remainder)*0.5; // TODO this needs to be fixed
+		  remainder -= lambda3;
 		  p_t1_given_t2w2 += lambda3*c_t1/totalCount;
 		  
 		  // Back off 3
-		  p_t1_given_t2w2 += (1 - lambda3)/ncCount;
+		  p_t1_given_t2w2 += (remainder)/ncCount;
+		  
 		   
 		  return Math.log(p_t1_given_t2w2);
 	  }
@@ -985,8 +1000,7 @@ public class NamedEntityClassifier {
 	  BufferedReader br = new BufferedReader(new FileReader(path));
 	  BufferedWriter bw = new BufferedWriter(new FileWriter(outpath));
 
-//	  Pattern wordPattern = Pattern.compile("('s)|([^'.\\s]+)|([.])", Pattern.DOTALL);
-	  Pattern wordPattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
+	  Pattern nePattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
 	  Pattern sentencePattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
 	  Pattern tagPattern = Pattern.compile("(<.+?>)", Pattern.DOTALL);
 	  Pattern endWordPattern = Pattern.compile("([.,%]|'s)", Pattern.DOTALL);
@@ -1012,7 +1026,7 @@ public class NamedEntityClassifier {
 			  // Check if last line ends without a tag, else proceed as normal
 			  if(!tagPattern.matcher(subLine).find()) {
 				  
-				  Matcher wordSplit = wordPattern.matcher(subLine);
+				  Matcher wordSplit = nePattern.matcher(subLine);
 				  List<String> words = new ArrayList<String>();
 				  while(wordSplit.find()){
 					  indexList.add(new int[]{wordSplit.start() + startOffset, wordSplit.end() + startOffset});
@@ -1332,6 +1346,7 @@ public class NamedEntityClassifier {
 	} catch (IOException e) {
 		e.printStackTrace();
 	}
+//    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
         
     // Score using lingpipe's scorer
     File refFile = new File(keyFilePath);
