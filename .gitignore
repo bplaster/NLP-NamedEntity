@@ -11,8 +11,8 @@
 /NamedEntity/lingpipe-4.1.0
 
 # Dataset
-/muc6
-/met2package
+/data
+/papers
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*

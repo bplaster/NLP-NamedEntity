@@ -26,7 +26,7 @@ public class NamedEntityClassifier {
   static final String NAN_TAG = "NAN";
   
 //  static final String NEPATTERN = "<.+?>(.+?)</.+?>|('s)|(\\d+[:/.,-]\\S*)|([\"$%])|(\\w+[-]?\\w+\\.?(?!\\s+$))|(\\S\\w*)";
-  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([.]+)|([{}()\"%,:?!$-])|(\\d+([:/.,-]\\d+)*)|(\\w+(?='s))|(\\w+'([a-r]|[t-z])\\w*)|('s)|(\\w+([']|[.](?!\\s*$))?)";
+  static final String NEPATTERN = "<.+?>(.+?)</.+?>|([.]+)|([{}()\"%,:?!$-])|(\\d+([:/.,-]\\d+)*)|(\\w+(?='[sS]))|(\\w+'([a-rA-R]|[t-zT-Z])\\w*)|('s)|(\\w+([']|[.](?!\\s*$))?)";
 //  static final String L1_PATTERN = "<.+?>(.+?)</.+?>|(\\S+)";
   static final String L2_PATTERN = "";
 
@@ -478,7 +478,7 @@ public class NamedEntityClassifier {
       List<String> tags = new BoundedList<String>(taggedSentence.getTags(), START_TAG, STOP_TAG);
       for (int position = 0; position <= taggedSentence.size() + 1; position++) {
     	  List<String> previousTags = new ArrayList<String>();
-    	  for( int n = 1; n < localNGramScorer.getNGrams(); n++){
+    	  for( int n = 1; n < localNGramScorer.getNGramMax(); n++){
     		  previousTags.add(tags.get(position - n));
     	  }
     	  labeledLocalNGramContexts.add(new LabeledLocalNGramContext(words, position, previousTags, tags.get(position)));
@@ -651,8 +651,8 @@ public class NamedEntityClassifier {
 
     void validate(List<LabeledLocalNGramContext> localNGramContexts);
     
-	void setNGrams(int nGrams);
-	int getNGrams();
+	void setNGramMax(int nGramMax);
+	int getNGramMax();
 
   }
 
@@ -662,15 +662,15 @@ public class NamedEntityClassifier {
    */
   static class HMMTagScorer implements LocalNGramScorer {
 	  
-	  int nGrams;
+	  int nGramMax;
 	  boolean restrictNGrams; // if true, assign log score of Double.NEGATIVE_INFINITY to illegal tag NGrams.
 	  
-	  public void setNGrams(int nGrams){
-		  this.nGrams = nGrams;
+	  public void setNGramMax(int nGramMax){
+		  this.nGramMax = nGramMax;
 	  }
 	  
-	  public int getNGrams(){
-		  return nGrams;
+	  public int getNGramMax(){
+		  return nGramMax;
 	  }
 	    
 	  public Counter<String> getLogScoreCounter(LocalNGramContext localNGramContext) {
@@ -739,12 +739,13 @@ public class NamedEntityClassifier {
 		  p_wv1_given_t1t2 += lambda2*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
 		  
 		  // Back off 2
-		  double lambda3 = (remainder)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  double lambda3 = (remainder)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1))));
 		  remainder -= lambda3;
 		  p_wv1_given_t1t2 += lambda3*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 3
-		  double lambda4 = (remainder)*0.5; // TODO This isn't correct
+		  double vf_total = wordCount.size()*featureCount;
+		  double lambda4 = (remainder)*(1.0 - c_t1/vf_total)*0.5; // TODO This might not be correct
 		  remainder -= lambda4;
 		  p_wv1_given_t1t2 += lambda4*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
@@ -761,22 +762,23 @@ public class NamedEntityClassifier {
 		  double c_t1wv2 = t1wv2_to_wv1.getCounter(key).totalCount();
 		  double p_wv1_given_t1wv2 = 0.0;
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda1 = (1 - c_t1wv2/c_t1)*(1/(1+(nGramsCount.getCounter(tag).size()/c_t1)));
+		  double lambda1 = (1.0 - c_t1wv2/c_t1)*(1.0/(1.0+(nGramsCount.getCounter(tag).size()/c_t1)));
 		  remainder -= lambda1;
 		  p_wv1_given_t1wv2 += lambda1*t1wv2_to_wv1.getCount(key, wv1.toString())/c_t1wv2;
 		  
 		  // Back off 1
-		  double lambda2 = (remainder)*(1 - 1/c_t1)*(1/(1+(ncCount/(c_t1*c_t1))));
+		  double lambda2 = (remainder)*(1.0 - 1.0/c_t1)*(1.0/(1.0+(ncCount/(c_t1))));
 		  remainder -= lambda2;
 		  p_wv1_given_t1wv2 += lambda2*wVnG.getCount(wv1, tag)/c_t1;
 
 		  // Back off 2
-		  double lambda3 = (remainder)*0.5; // TODO this needs to be fixed
+		  double vf_total = wordCount.size()*featureCount;
+		  double lambda3 = (remainder)*(1.0 - c_t1/vf_total)*0.5; // TODO this needs to be fixed
 		  remainder -= lambda3;
 		  p_wv1_given_t1wv2 += lambda3*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
 		  
 		  // Back off 3
-		  p_wv1_given_t1wv2 += (remainder)/(wordCount.size()*featureCount);
+		  p_wv1_given_t1wv2 += (remainder)/(vf_total);
 		  
 		  return Math.log(p_wv1_given_t1wv2);
 	  }
@@ -784,6 +786,7 @@ public class NamedEntityClassifier {
 	  private double nameClassBigram(String tag, String previousTag, String previousWord){
 		  // Base Model
 		  double remainder = 1.0;
+		  
 		  double p_t1_given_t2w2 = 0.0;
 		  String key_t2w2 = previousTag + " " + previousWord;
 		  double c_t2w2 = t2w2_to_t1.getCounter(key_t2w2).totalCount();
@@ -800,7 +803,7 @@ public class NamedEntityClassifier {
 		  
 		  // Back off 2
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda3 = (remainder)*0.5; // TODO this needs to be fixed
+		  double lambda3 = (remainder)*(1.0 - 1.0/ncCount)*(0.5); // TODO this might need to be fixed
 		  remainder -= lambda3;
 		  p_t1_given_t2w2 += lambda3*c_t1/totalCount;
 		  
@@ -905,8 +908,8 @@ public class NamedEntityClassifier {
 	      // no tuning for this dummy model!
 	  }
 	  
-	  public HMMTagScorer(int nGrams, boolean restrictNGrams) {
-		  setNGrams(nGrams);
+	  public HMMTagScorer(int nGramMax, boolean restrictNGrams) {
+		  setNGramMax(nGramMax);
 		  this.restrictNGrams = restrictNGrams;
 	  }
   }
@@ -1287,7 +1290,8 @@ public class NamedEntityClassifier {
     
     // Which test to use
     if (argMap.containsKey("-test")){
-    	if(corpus.equals("muc6")){
+    	switch(corpus){
+    	case "muc6":{
 	        switch(argMap.get("-test").toLowerCase()) {
 	        case "formal":
 	        	testFile = "ne-co.formal.test.texts";
@@ -1297,11 +1301,32 @@ public class NamedEntityClassifier {
 	        	testFile = "NE-CO.dryrun-single";
 	        	testKeyFile = "dryrun-test.NE.key.02may95-single";
 	        	break;
+	        case "dryrun-uppercase":
+		        testFile = "NE-CO.dryrun-edited-uppercase";
+		        testKeyFile = "dryrun-test.NE.key.02may95-edited-uppercase";
+		        break;
 	        default:
 		        testFile = "NE-CO.dryrun-edited";
 		        testKeyFile = "dryrun-test.NE.key.02may95-edited";
-
+		        break;
 	        }
+	        break;
+	    }
+    	case "twitter":{
+    		switch(argMap.get("-test").toLowerCase()) {
+	        case "formal":
+	        	testFile = "ner-formal";
+	        	testKeyFile = "ner-formal";
+	        	break;
+	        default:
+		        testFile = "ner-dryrun";
+		        testKeyFile = "ner-dryrun";
+		        break;
+	        }
+	        break;
+    	}
+    	default:
+    		break;
 	    }
     }
 
@@ -1327,13 +1352,13 @@ public class NamedEntityClassifier {
     // Construct tagger components
     LocalNGramScorer localNGramScorer;
     TrellisDecoder<State> trellisDecoder;
-    int nGrams = 2;
+    int nGramMax = 2;
     
     if (argMap.containsKey("-ngrams")){
-    	nGrams = Integer.parseInt(argMap.get("-ngrams"));
+    	nGramMax = Integer.parseInt(argMap.get("-ngrams"));
 	}
     
-	localNGramScorer = new HMMTagScorer(nGrams, false);
+	localNGramScorer = new HMMTagScorer(nGramMax, false);
 	trellisDecoder = new ViterbiDecoder<State>();
 
     // Train tagger
@@ -1346,7 +1371,7 @@ public class NamedEntityClassifier {
 	} catch (IOException e) {
 		e.printStackTrace();
 	}
-//    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
+    evaluateTagger(neTagger, testTaggedSentences, trainingVocabulary, verbose);
         
     // Score using lingpipe's scorer
     File refFile = new File(keyFilePath);
