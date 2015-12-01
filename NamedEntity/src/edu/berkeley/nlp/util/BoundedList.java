@@ -1,6 +1,7 @@
 package edu.berkeley.nlp.util;
 
 import java.util.AbstractList;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -29,6 +30,32 @@ public class BoundedList <E> extends AbstractList<E> {
 
   public int size() {
     return list.size();
+  }
+  
+  public List<E> subList(int fromIndex, int toIndex){
+	  int min = (fromIndex < 0) ? 0 : fromIndex;
+	  int max = (toIndex < 0) ? 0 : toIndex;
+
+	  min = (min > list.size()) ? list.size() : min;
+	  max = (max > list.size()) ? list.size() : max;
+	  
+	  List<E> newList = new ArrayList<E>(list.subList(min, max));
+
+	  if(fromIndex < 0){
+		  int cnt = (toIndex > 0) ? -fromIndex : toIndex - fromIndex;
+		  for(int i=0; i < cnt; i++){
+			  newList.add(0, leftBoundary);
+		  }
+	  }
+	  
+	  if(toIndex > list.size()){
+		  int cnt = (fromIndex < list.size()) ? toIndex - list.size() : toIndex - fromIndex;
+		  for(int i=0; i < cnt; i++){
+			  newList.add(rightBoundary);
+		  }
+	  }
+	 
+	  return newList;
   }
 
   public BoundedList(List<E> list, E leftBoundary, E rightBoundary) {
