@@ -7,8 +7,18 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.io.*;
+import java.nio.file.Files;
 
 import com.aliasi.chunk.Chunking;
+import com.aliasi.chunk.TagChunkCodec;
+import com.aliasi.chunk.TagChunkCodecAdapters;
+import com.aliasi.chunk.AbstractCharLmRescoringChunker;
+import com.aliasi.chunk.ChunkerEvaluator;
+import com.aliasi.chunk.Conll2002ChunkTagParser;
+
+import com.aliasi.corpus.ObjectHandler;
+
+import com.aliasi.util.AbstractExternalizable;
 import com.aliasi.corpus.*;
 
 /**
@@ -745,7 +755,7 @@ public class NamedEntityClassifier {
 	  
 	  private double firstWordBigram(WordVec wv1, String tag, List<String> previousTags){
 		  // Base Model expanded to NGram
-		  double remainder = 1.0;
+		  double prevLambda = 0.0;
 		  double p_wv1_given_tn = 0.0;
 
 		  List<String> nGramList = new ArrayList<String>(previousTags.subList(0, nGramMax-1));
@@ -762,8 +772,8 @@ public class NamedEntityClassifier {
 			  // Calculate weight & base model
 			  double c_tn_next = nGramsCount.getCounter(nGram_next).totalCount();
 			  double lambda = (1.0 - c_tn_old/c_tn_next)*(1.0/(1.0+(nGramsCount.getCounter(nGram_next).size()/c_tn_next)));
-			  if(c_tn_old > 0) p_wv1_given_tn += (remainder)*(1.0 - lambda)*wVnG.getCount(wv1, nGram_old)/c_tn_old;
-			  remainder -= (remainder)*(lambda);
+			  if(c_tn_old > 0) p_wv1_given_tn += (1.0 - prevLambda)*(lambda)*wVnG.getCount(wv1, nGram_old)/c_tn_old;
+			  prevLambda = lambda;
 
 			  c_tn_old = c_tn_next;
 			  nGram_old = nGram_next;
@@ -774,65 +784,64 @@ public class NamedEntityClassifier {
 		  WordVec wvB = new WordVec(BEGIN_WORD, false);
 		  double c_t1wvB = t1wv2_to_wv1.getCounter(tag + " " + wvB.toString()).totalCount();
 		  double lambda1 = (1.0 - c_t1t2/c_t1wvB)*(1.0/(1.0+(ncCount/c_t1wvB)));
-		  
-		  if(c_t1t2>0) p_wv1_given_tn += (remainder)*(1.0 - lambda1)*wVnG.getCount(wv1, nGram_old)/c_t1t2;
-		  remainder -= (remainder)*(lambda1);
-		  
+		  if(c_t1t2>0) p_wv1_given_tn += (1.0 - prevLambda)*(lambda1)*wVnG.getCount(wv1, nGram_old)/c_t1t2;
+		  prevLambda = lambda1;
+
 		  // Back off 1
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
 		  double lambda2 = (1.0 - c_t1wvB/c_t1)*(1.0/(1.0+(nGramsCount.getCounter(tag).size()/c_t1)));
-		  if(c_t1wvB>0) p_wv1_given_tn += (remainder)*(1.0 - lambda2)*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
-		  remainder -= (remainder)*(lambda2);
+		  if(c_t1wvB>0) p_wv1_given_tn += (1.0 - prevLambda)*(lambda2)*t1wv2_to_wv1.getCount(tag + " " + wvB.toString(), wv1.toString())/c_t1wvB;
+		  prevLambda = lambda2;
 
 		  // Back off 2
 		  double lambda3 = (1.0 - 1.0/c_t1)*(1.0/(1.0+(ncCount/(c_t1))));
-		  if(c_t1>0) p_wv1_given_tn += (remainder)*(1.0 - lambda3)*wVnG.getCount(wv1, tag)/c_t1;
-		  remainder -= (remainder)*(lambda3);
+		  if(c_t1>0) p_wv1_given_tn += (1.0 - prevLambda)*(lambda3)*wVnG.getCount(wv1, tag)/c_t1;
+		  prevLambda = lambda3;
 
 		  // Back off 3
 		  double vf_total = wordCount.size()*featureCount;
 		  double lambda4 = (1.0 - c_t1/vf_total)*0.5; // TODO This might not be correct
-		  if(c_t1>0) p_wv1_given_tn += (remainder)*(1.0 - lambda4)*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
-		  remainder -= (remainder)*(lambda4);
+		  if(c_t1>0) p_wv1_given_tn += (1.0 - prevLambda)*(lambda4)*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
+		  prevLambda = lambda4;
 
 		  // Back off 4
-		  if(wordCount.size()*featureCount>0) p_wv1_given_tn += (remainder)/(wordCount.size()*featureCount);
+		  if(wordCount.size()*featureCount>0) p_wv1_given_tn += (1.0 - prevLambda)/(wordCount.size()*featureCount);
 		  
 		  return Math.log(p_wv1_given_tn);
 	  }
 	  
 	  private double nonFirstWordBigram(WordVec wv1, WordVec wv2, String tag){
 		  // Base Model
-		  double remainder = 1.0;
+		  double prevLambda = 0.0;
 		  String key = tag + " " + wv2.toString();
 		  double c_t1wv2 = t1wv2_to_wv1.getCounter(key).totalCount();
 		  double p_wv1_given_t1wv2 = 0.0;
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
 		  double lambda1 = (1.0 - c_t1wv2/c_t1)*(1.0/(1.0+(nGramsCount.getCounter(tag).size()/c_t1)));
-		  if(c_t1wv2>0) p_wv1_given_t1wv2 += (remainder)*(1.0 - lambda1)*t1wv2_to_wv1.getCount(key, wv1.toString())/c_t1wv2;
-		  remainder -= (remainder)*(lambda1);
-		  
+		  if(c_t1wv2>0) p_wv1_given_t1wv2 += (1.0 - prevLambda)*(lambda1)*t1wv2_to_wv1.getCount(key, wv1.toString())/c_t1wv2;
+		  prevLambda = lambda1;
+
 		  // Back off 1
 		  double lambda2 = (1.0 - 1.0/c_t1)*(1.0/(1.0+(ncCount/(c_t1))));
-		  if(c_t1>0) p_wv1_given_t1wv2 += (remainder)*(1.0 - lambda2)*wVnG.getCount(wv1, tag)/c_t1;
-		  remainder -= (remainder)*(lambda2);
+		  if(c_t1>0) p_wv1_given_t1wv2 += (1.0 - prevLambda)*(lambda2)*wVnG.getCount(wv1, tag)/c_t1;
+		  prevLambda = lambda2;
 
 		  // Back off 2
 		  double vf_total = wordCount.size()*featureCount;
 		  double lambda3 = (1.0 - c_t1/vf_total)*0.5; // TODO this needs to be fixed
-		  if(c_t1>0) p_wv1_given_t1wv2 += (remainder)*(1.0 - lambda3)*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
-		  remainder -= (remainder)*(lambda3);
+		  if(c_t1>0) p_wv1_given_t1wv2 += (1.0 - prevLambda)*(lambda3)*wordsToTags.getCount(wv1.word, tag)*tagsToFeatures.getCount(tag, wv1.feature)/(c_t1*c_t1);
+		  prevLambda = lambda3;
 
 		  // Back off 3
-		  if(vf_total>0) p_wv1_given_t1wv2 += (remainder)/(vf_total);
+		  if(vf_total>0) p_wv1_given_t1wv2 += (1.0 - prevLambda)/(vf_total);
 		  
 		  return Math.log(p_wv1_given_t1wv2);
 	  }
 	  
 	  private double nameClassBigram(String tag, List<String> previousTags, List<String> previousWords){
 		  // Base Model expanded to NGram
-		  double remainder = 1.0;
 		  double p_t1_given_tnwn = 0.0;
+		  double prevLambda = 0.0;
 		  
 		  String key_tnwn_old = previousTags.get(0) + " " + previousWords.get(0);
 		  for(int i = 1; i < nGramMax-1; i++){ key_tnwn_old += " " + previousTags.get(i) + " " + previousWords.get(i); }
@@ -846,9 +855,8 @@ public class NamedEntityClassifier {
 			  // Calculate weight & base model
 			  double c_tnwn_next = tnwn_to_t1.getCounter(key_tnwn_next).totalCount();
 			  double lambda = (1.0 - c_tnwn_old/c_tnwn_next)*(1.0/(1.0+(tnwn_to_t1.getCounter(key_tnwn_next).size()/c_tnwn_next)));
-			  if(c_tnwn_old>0) p_t1_given_tnwn += (remainder)*(1.0 - lambda)*tnwn_to_t1.getCount(key_tnwn_old, tag)/c_tnwn_old;
-			  remainder -= (remainder)*(lambda);
-
+			  if(c_tnwn_old>0) p_t1_given_tnwn += (1.0 - prevLambda)*(lambda)*tnwn_to_t1.getCount(key_tnwn_old, tag)/c_tnwn_old;
+			  prevLambda = lambda;
 			  key_tnwn_old = key_tnwn_next;
 			  c_tnwn_old = c_tnwn_next;
 		  }
@@ -857,22 +865,22 @@ public class NamedEntityClassifier {
   		  String bigram = makeNGramString(Arrays.asList(tag, previousTags.get(0)));
 		  double c_t2 = nGramsCount.getCounter(previousTags.get(0)).totalCount();
 		  double lambda1 = (1.0 - c_tnwn_old/c_t2)*(1.0/(1.0+(nGramsCount.getCounter(previousTags.get(0)).size()/c_t2)));
-		  if(c_tnwn_old>0) p_t1_given_tnwn += (remainder)*(1.0 - lambda1)*tnwn_to_t1.getCount(key_tnwn_old, tag)/c_tnwn_old;
-		  remainder -= (remainder)*(lambda1);
+		  if(c_tnwn_old>0) p_t1_given_tnwn += (1.0 - prevLambda)*(lambda1)*tnwn_to_t1.getCount(key_tnwn_old, tag)/c_tnwn_old;
+		  prevLambda = lambda1;
 
 		  // Back off 1
 		  double lambda2 = (1.0 - c_t2/totalCount)*(1.0/(1.0+(ncCount/totalCount)));
-		  if(c_t2>0) p_t1_given_tnwn += (remainder)*(1.0 - lambda2)*nGramsCount.getCounter(bigram).totalCount()/c_t2;
-		  remainder -= (remainder)*(lambda2);
-		  
+		  if(c_t2>0) p_t1_given_tnwn += (1.0 - prevLambda)*(lambda2)*nGramsCount.getCounter(bigram).totalCount()/c_t2;
+		  prevLambda = lambda2;
+
 		  // Back off 2
 		  double c_t1 = nGramsCount.getCounter(tag).totalCount();
-		  double lambda3 = (remainder)*(1.0 - 1.0/ncCount)*(0.5); // TODO this might need to be fixed
-		  if(totalCount>0) p_t1_given_tnwn += (remainder)*(1.0 - lambda3)*c_t1/totalCount;
-		  remainder -= (remainder)*(lambda3);
-		  
-		  // Back off 3
-		  if(ncCount>0) p_t1_given_tnwn += (remainder)/ncCount;
+		  double lambda3 = (1.0 - 1.0/ncCount)*(0.5); // TODO this might need to be fixed
+		  if(totalCount>0) p_t1_given_tnwn += (1.0 - prevLambda)*(lambda3)*c_t1/totalCount;
+		  prevLambda = lambda3;
+
+//		  // Back off 3
+//		  if(ncCount>0) p_t1_given_tnwn += (1.0 - prevLambda)/ncCount;
 		   
 		  return Math.log(p_t1_given_tnwn);
 	  }
@@ -901,7 +909,6 @@ public class NamedEntityClassifier {
 		  int halfSize = Math.round(labeledLocalNGramContexts.size()/2);
 		  
 		  // Train vocabulary
-		  // TODO generalize for nGrams
 		  for(int i = 0; i < labeledLocalNGramContexts.size(); i++){
 			  LabeledLocalNGramContext labeledLocalNGramContext = labeledLocalNGramContexts.get(i);
 			  int position = labeledLocalNGramContext.getPosition();
@@ -976,11 +983,11 @@ public class NamedEntityClassifier {
 				  
 				  // Account for first position nGrams
 				  if(position == 0){
-//					  String st_nGram = nTags + " " + START_TAG;
+					  String st_nGram = nTags + " " + START_TAG;
 					  tnwn_to_t1.incrementCount(START_TAG + " " + START_WORD + key_tnwn_ext, previousTag, 1.0);
-					  wVnG.incrementCount(wv2, START_TAG, 1.0);
+					  wVnG.incrementCount(wv2, st_nGram, 1.0);
 					  wVnG.incrementCount(wv2, nTags, 1.0);
-					  nGramsCount.incrementCount(START_TAG, previousWord, 1.0);
+					  nGramsCount.incrementCount(st_nGram, previousWord, 1.0);
 					  nGramsCount.incrementCount(nTags, previousWord, 1.0);
 				  }
 			  }
@@ -1096,87 +1103,138 @@ public class NamedEntityClassifier {
 	  BufferedReader br = new BufferedReader(new FileReader(path));
 	  BufferedWriter bw = new BufferedWriter(new FileWriter(outpath));
 
-	  Pattern nePattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
-	  Pattern sentencePattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
-	  Pattern tagPattern = Pattern.compile("(<.+?>)", Pattern.DOTALL);
-	  
-	  String line = null;  
-	  String taggedLine = null;
-      String lastTag = null;
-      boolean writeStarted = false;
-      List<int[]> indexList;
-
-	  while ((line = br.readLine()) != null) {
-		  indexList = new ArrayList<int[]>();
+	  switch(corpus){
+	  case "muc6":{
+		  Pattern nePattern = Pattern.compile(NEPATTERN, Pattern.DOTALL);
+		  Pattern sentencePattern = Pattern.compile("(<.+?>)|([^<>]+)", Pattern.DOTALL);
+		  Pattern tagPattern = Pattern.compile("(<.+?>)", Pattern.DOTALL);
 		  
-		  Matcher split = sentencePattern.matcher(line);
-		  taggedLine = line;
-		  lastTag = START_TAG;
-		  boolean needsEndTag = false;
-		  while(split.find()){
-			  
-			  String subLine = split.group(0);
-			  int startOffset = split.start();
-			  
-			  // Check if last line ends without a tag, else proceed as normal
-			  if(!tagPattern.matcher(subLine).find()) {
-				  
-				  Matcher wordSplit = nePattern.matcher(subLine);
-				  List<String> words = new ArrayList<String>();
-				  while(wordSplit.find()){
-					  indexList.add(new int[]{wordSplit.start() + startOffset, wordSplit.end() + startOffset});
-					  words.add(wordSplit.group(0).trim());
-				  }
-			      List<String> boundedWords = new BoundedList<String>(words, START_WORD, STOP_WORD);
-			      List<String> tags = neTagger.tag(boundedWords);
-			      List<Integer> insertIndex = new ArrayList<Integer>();
-			      List<String> docTags = new ArrayList<String>();
-			      
-			      for(int i = 0; i < tags.size(); i++){
-			    	  String tag = tags.get(i);
-			    	  boolean lastIndex = (i == tags.size() - 1);
-			    	  if(!tag.equals(lastTag)){
-			    		  // First tag the end tag for the preceding word
-			    		  if(lastTag != NAN_TAG && needsEndTag) {
-			    			  needsEndTag = false;
-				    		  String tagType = getTypeForTag(lastTag);
-			    			  docTags.add("</"+tagType+">");
-			    			  insertIndex.add(indexList.get(i-1)[1]);
-			    		  }
-			    		  // Then tag the start of the new tag
-			    		  if(tag != NAN_TAG) {
-			    			  needsEndTag = true;
-				    		  String tagType = getTypeForTag(tag);
-			    			  docTags.add("<" + tagType + " TYPE=\""+tag+"\">");
-			    			  insertIndex.add(indexList.get(i)[0]);
-			    		  }
-			    		  
-			    	  } 
-			    	  
-			    	  if(lastIndex && needsEndTag){
-		    			  needsEndTag = false;
-		    			  String tagType = getTypeForTag(tag);
-		    			  docTags.add("</"+tagType+">");
-		    			  insertIndex.add(indexList.get(i)[1]);
-		    		  }
-			    	  
-			    	  lastTag = tag;
-			      }
-			      
-			      // Iterate through this backwards so that the indices are valid
-			      for(int i = docTags.size()-1; i >= 0; i--){
-			    	  String word = docTags.get(i);
-			    	  int index = insertIndex.get(i);
-			    	  taggedLine = new StringBuilder(taggedLine).insert(index, word).toString();
-			      }
-			  }
-		  }
+		  String line = null;  
+		  String taggedLine = null;
+	      String lastTag = null;
+	      boolean writeStarted = false;
+	      List<int[]> indexList;
 
-		  // Write to file
-		  if(writeStarted) bw.newLine();
-		  else writeStarted = true;
-		  bw.write(taggedLine);
-	  } 
+		  while ((line = br.readLine()) != null) {
+			  indexList = new ArrayList<int[]>();
+			  
+			  Matcher split = sentencePattern.matcher(line);
+			  taggedLine = line;
+			  lastTag = START_TAG;
+			  boolean needsEndTag = false;
+			  while(split.find()){
+				  
+				  String subLine = split.group(0);
+				  int startOffset = split.start();
+				  
+				  // Check if last line ends without a tag, else proceed as normal
+				  if(!tagPattern.matcher(subLine).find()) {
+					  
+					  Matcher wordSplit = nePattern.matcher(subLine);
+					  List<String> words = new ArrayList<String>();
+					  while(wordSplit.find()){
+						  indexList.add(new int[]{wordSplit.start() + startOffset, wordSplit.end() + startOffset});
+						  words.add(wordSplit.group(0).trim());
+					  }
+				      List<String> boundedWords = new BoundedList<String>(words, START_WORD, STOP_WORD);
+				      List<String> tags = neTagger.tag(boundedWords);
+				      List<Integer> insertIndex = new ArrayList<Integer>();
+				      List<String> docTags = new ArrayList<String>();
+				      
+				      for(int i = 0; i < tags.size(); i++){
+				    	  String tag = tags.get(i);
+				    	  boolean lastIndex = (i == tags.size() - 1);
+				    	  if(!tag.equals(lastTag)){
+				    		  // First tag the end tag for the preceding word
+				    		  if(lastTag != NAN_TAG && needsEndTag) {
+				    			  needsEndTag = false;
+					    		  String tagType = getTypeForTag(lastTag);
+				    			  docTags.add("</"+tagType+">");
+				    			  insertIndex.add(indexList.get(i-1)[1]);
+				    		  }
+				    		  // Then tag the start of the new tag
+				    		  if(tag != NAN_TAG) {
+				    			  needsEndTag = true;
+					    		  String tagType = getTypeForTag(tag);
+				    			  docTags.add("<" + tagType + " TYPE=\""+tag+"\">");
+				    			  insertIndex.add(indexList.get(i)[0]);
+				    		  }
+				    		  
+				    	  } 
+				    	  
+				    	  if(lastIndex && needsEndTag){
+			    			  needsEndTag = false;
+			    			  String tagType = getTypeForTag(tag);
+			    			  docTags.add("</"+tagType+">");
+			    			  insertIndex.add(indexList.get(i)[1]);
+			    		  }
+				    	  
+				    	  lastTag = tag;
+				      }
+				      
+				      // Iterate through this backwards so that the indices are valid
+				      for(int i = docTags.size()-1; i >= 0; i--){
+				    	  String word = docTags.get(i);
+				    	  int index = insertIndex.get(i);
+				    	  taggedLine = new StringBuilder(taggedLine).insert(index, word).toString();
+				      }
+				  }
+			  }
+
+			  // Write to file
+			  if(writeStarted) bw.newLine();
+			  else writeStarted = true;
+			  bw.write(taggedLine);
+		  } 
+		  
+		  break;
+	  }
+	  case "conll-esp":{
+		  List<TaggedSentence> taggedSentences = readTaggedSentences(corpus, path);
+		  for(TaggedSentence sentence : taggedSentences){
+			  List<String> words = sentence.getWords();
+			  List<String> tags = sentence.getTags();
+			  for(int i = 0; i < words.size() ; i++){
+				  String tag = (tags.get(i) == NAN_TAG) ? "O" : tags.get(i);
+				  bw.write(words.get(i) + " " + tag);
+				  bw.newLine();
+			  }
+			  bw.newLine();
+		  }
+		  break;
+	  }
+	  case "conll-ned":{
+		  List<TaggedSentence> taggedSentences = readTaggedSentences(corpus, path);
+		  for(TaggedSentence sentence : taggedSentences){
+			  List<String> words = sentence.getWords();
+			  List<String> tags = sentence.getTags();
+			  for(int i = 0; i < words.size() ; i++){
+				  String tag = (tags.get(i) == NAN_TAG) ? "O" : tags.get(i);
+				  bw.write(words.get(i) + " " + tag);
+				  bw.newLine();
+			  }
+			  bw.newLine();
+		  }
+		  break;
+	  }
+	  case "twitter":{
+		  List<TaggedSentence> taggedSentences = readTaggedSentences(corpus, path);
+		  for(TaggedSentence sentence : taggedSentences){
+			  List<String> words = sentence.getWords();
+			  List<String> tags = sentence.getTags();
+			  for(int i = 0; i < words.size() ; i++){
+				  String tag = (tags.get(i) == NAN_TAG) ? "O" : tags.get(i);
+				  bw.write(words.get(i) + "\t" + tag);
+				  bw.newLine();
+			  }
+			  bw.newLine();
+		  }
+		  break;
+	  }
+	  default:
+		  break;
+	  }
+	  
 
 	  br.close();
 	  bw.close();
@@ -1200,11 +1258,36 @@ public class NamedEntityClassifier {
 
 	  		break;
 	  	}
-	  	case "met1": {
-	  		System.out.print("Met 1 Corpus...");
+	  	case "conll-esp": {
+	  		System.out.print("ConLL Spanish 2002 Corpus...");
 	  		try {
-	  			// TODO Create MET Reader
-	  			taggedSentences = readMUCData(path);
+	  			// TODO Create ConLL Reader
+	  			File dir = new File(path);
+	  			taggedSentences = readConllData(dir, corpus);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+
+	  		break;
+	  	}
+	  	case "conll-ned": {
+	  		System.out.print("ConLL Dutch 2002 Corpus...");
+	  		try {
+	  			// TODO Create ConLL Reader
+	  			File dir = new File(path);
+	  			taggedSentences = readConllData(dir, corpus);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+
+	  		break;
+	  	}
+	  	case "twitter": {
+	  		System.out.print("Twitter Corpus...");
+	  		try {
+	  			// TODO Create ConLL Reader
+	  			File dir = new File(path);
+	  			taggedSentences = readTwitterData(dir);
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
@@ -1236,6 +1319,78 @@ public class NamedEntityClassifier {
 				  MUCDocument document = new MUCDocument(doc);
 				  taggedSentences.addAll(document.getTaggedSentences());
 			  }
+		  }
+	  }
+
+	  br.close();
+	  
+	  return taggedSentences;
+  }
+  
+  private static List<TaggedSentence> readConllData(File file, String corpus) throws IOException{
+	  List<TaggedSentence> taggedSentences = new ArrayList<TaggedSentence>();
+	  BufferedReader br = new BufferedReader(new FileReader(file));
+
+	  String line = null;
+	  	  	  
+	  List<String> wordArray = new ArrayList<String>();
+	  List<String> tagArray = new ArrayList<String>();
+	  while ((line = br.readLine()) != null) {
+		  if(line.isEmpty()){
+			  // Add sentence to tagged sentences
+			  if(!wordArray.isEmpty() && !tagArray.isEmpty()){
+				  List <String> words = new BoundedList<String>(new ArrayList<String>(wordArray), START_WORD, STOP_WORD);
+				  List <String> tags = new BoundedList<String>(new ArrayList<String>(tagArray), START_TAG, STOP_TAG);
+				  taggedSentences.add(new TaggedSentence(words, tags));
+				  wordArray.clear();
+				  tagArray.clear();
+			  }
+		  } else {
+			  String[] entry = line.split(" ");
+			  wordArray.add(entry[0]);
+			  String tag = "";
+			  switch(corpus){
+			  case "conll-esp":
+				  tag = (entry[1] == "O") ? NAN_TAG : entry[1];
+				  break;
+			  case "conll-ned":
+				  tag = (entry[2] == "O") ? NAN_TAG : entry[2];
+				  break;
+			  default:
+				  break;
+			  }
+			  tagArray.add(tag);
+		  }
+	  }
+
+	  br.close();
+	  
+	  return taggedSentences;
+  }
+  
+  private static List<TaggedSentence> readTwitterData(File file) throws IOException{
+	  List<TaggedSentence> taggedSentences = new ArrayList<TaggedSentence>();
+	  BufferedReader br = new BufferedReader(new FileReader(file));
+
+	  String line = null;
+	  	  	  
+	  List<String> wordArray = new ArrayList<String>();
+	  List<String> tagArray = new ArrayList<String>();
+	  while ((line = br.readLine()) != null) {
+		  if(line.equals("\t") || line.isEmpty()){
+			  // Add sentence to tagged sentences
+			  if(!wordArray.isEmpty() && !tagArray.isEmpty()){
+				  List <String> words = new BoundedList<String>(new ArrayList<String>(wordArray), START_WORD, STOP_WORD);
+				  List <String> tags = new BoundedList<String>(new ArrayList<String>(tagArray), START_TAG, STOP_TAG);
+				  taggedSentences.add(new TaggedSentence(words, tags));
+				  wordArray.clear();
+				  tagArray.clear();
+			  }
+		  } else {
+			  String[] entry = line.split("\t");
+				  wordArray.add(entry[0]);
+				  String tag = (entry[1] == "O") ? NAN_TAG : entry[1];
+				  tagArray.add(tag);
 		  }
 	  }
 
@@ -1386,7 +1541,7 @@ public class NamedEntityClassifier {
 	  }
   }
   
-  public static void main(String[] args) throws IOException {
+  public static void main(String[] args) throws IOException, ClassNotFoundException {
     // Parse command line flags and arguments
     Map<String, String> argMap = CommandLineUtils.simpleCommandLineParser(args);
 
@@ -1394,8 +1549,10 @@ public class NamedEntityClassifier {
     String basePath = ".";
     String testFile = "";
     String testKeyFile = "";
+    String trainFiles = "";
     boolean verbose = false;
-    String corpus = "muc6";
+//    String corpus = "muc6";
+    String corpus = "conll";
 
     // The path to the assignment data
     if (argMap.containsKey("-path")) {
@@ -1408,10 +1565,16 @@ public class NamedEntityClassifier {
         corpus = argMap.get("-corpus").toLowerCase(); 
     }
     
+    String testFilePath = "";
+    String taggedFilePath = "";
+    String keyFilePath = "";
+    String trainFilePath = "";
+    
     // Which test to use
     if (argMap.containsKey("-test")){
     	switch(corpus){
     	case "muc6":{
+    		trainFiles = "dryrun-trng.NE-combined.key.v1.3.clean";
 	        switch(argMap.get("-test").toLowerCase()) {
 	        case "formal":
 	        	testFile = "ne-co.formal.test.texts";
@@ -1430,19 +1593,78 @@ public class NamedEntityClassifier {
 		        testKeyFile = "dryrun-test.NE.key.02may95-edited";
 		        break;
 	        }
+	        
+	        testFilePath = basePath + "texts/" + testFile + ".txt";
+	        taggedFilePath = basePath + "texts/" + testFile + "-tagged.txt";
+	        keyFilePath = basePath + "keys/" + testKeyFile + ".txt";
+	        trainFilePath = basePath + "keys/" + trainFiles;
+	        
 	        break;
 	    }
     	case "twitter":{
+    		trainFiles = "ner-train.txt";
     		switch(argMap.get("-test").toLowerCase()) {
 	        case "formal":
 	        	testFile = "ner-formal";
-	        	testKeyFile = "ner-formal";
 	        	break;
 	        default:
 		        testFile = "ner-dryrun";
-		        testKeyFile = "ner-dryrun";
 		        break;
 	        }
+    		
+	        testFilePath = basePath + testFile + ".txt";
+	        taggedFilePath = basePath  + testFile + "-tagged.txt";
+	        keyFilePath = basePath + testFile + ".txt";
+	        trainFilePath = basePath + trainFiles;
+	        
+	        break;
+    	}
+    	case "conll-esp":{
+    		trainFiles = "esp.train.txt";
+    		switch(argMap.get("-test").toLowerCase()) {
+	        case "formal":
+	        	testFile = "esp.testb";
+	        	break;
+	        case "dryrun-single":
+	        	testFile = "esp.testa-short";
+	        	break;
+	        case "dryrun":
+	        	testFile = "esp.testa";
+	        	break;
+	        default:
+		        testFile = "esp.testa";
+		        break;
+	        }
+    		
+	        testFilePath = basePath + testFile + ".txt";
+	        taggedFilePath = basePath  + testFile + "-tagged.txt";
+	        keyFilePath = basePath + testFile + ".txt";
+	        trainFilePath = basePath + trainFiles;
+	        
+	        break;
+    	}
+    	case "conll-ned":{
+    		trainFiles = "ned.train.txt";
+    		switch(argMap.get("-test").toLowerCase()) {
+	        case "formal":
+	        	testFile = "ned.testb";
+	        	break;
+	        case "dryrun-single":
+	        	testFile = "ned.testa-short";
+	        	break;
+	        case "dryrun":
+	        	testFile = "ned.testa";
+	        	break;
+	        default:
+		        testFile = "ned.testa";
+		        break;
+	        }
+    		
+	        testFilePath = basePath + testFile + ".txt";
+	        taggedFilePath = basePath  + testFile + "-tagged.txt";
+	        keyFilePath = basePath + testFile + ".txt";
+	        trainFilePath = basePath + trainFiles;
+	        
 	        break;
     	}
     	default:
@@ -1454,11 +1676,6 @@ public class NamedEntityClassifier {
     if (argMap.containsKey("-verbose")) {
       verbose = true;
     }
-    
-    String testFilePath = basePath + "texts/" + testFile + ".txt";
-    String taggedFilePath = basePath + "texts/" + testFile + "-tagged.txt";
-    String keyFilePath = basePath + "keys/" + testKeyFile + ".txt";
-    String trainFilePath = basePath + "keys/dryrun-trng.NE-combined.key.v1.3.clean";
 
     // Read in data
     System.out.print("Loading training sentences...");
@@ -1496,15 +1713,44 @@ public class NamedEntityClassifier {
     // Score using lingpipe's scorer
     File refFile = new File(keyFilePath);
     File responseFile = new File(taggedFilePath);
-    ChunkingCollector refCollector = new ChunkingCollector();
-    @SuppressWarnings("deprecation")
-	Parser<ObjectHandler<Chunking>> parser = new  Muc6ChunkParser();
-    parser.setHandler(refCollector);
-    parser.parse(refFile);
-    FileScorer scorer = new FileScorer(parser);
-    scorer.score(refFile,responseFile);
-    System.out.printf("\nLINGPIPE SCORING\n");
-    System.out.println(scorer.evaluation().toString());
+    
+    switch(corpus){
+    case "muc6":{
+        ChunkingCollector refCollector = new ChunkingCollector();
+        @SuppressWarnings("deprecation")
+    	Parser<ObjectHandler<Chunking>> parser = new  Muc6ChunkParser();
+        parser.setHandler(refCollector);
+        parser.parse(refFile);
+        FileScorer scorer = new FileScorer(parser);
+        scorer.score(refFile,responseFile);
+        System.out.printf("\nLINGPIPE SCORING\n");
+        System.out.println(scorer.evaluation().toString());
+    	break;
+    }
+    case "conll":{
+    	
+//    	String oosPath = basePath + testFile + "-oos";
+//    	FileOutputStream fos = new FileOutputStream(oosPath);
+//        ObjectOutputStream oos = new ObjectOutputStream(fos);
+//        byte[] content = Files.readAllBytes(refFile.toPath());
+//        oos.writeObject(content);
+//        oos.close();
+//        File oosFile = new File(oosPath);
+//        
+//        AbstractCharLmRescoringChunker<?, ?, ?> chunker = (AbstractCharLmRescoringChunker<?, ?, ?>) AbstractExternalizable.readObject(oosFile);
+//        ChunkerEvaluator evaluator = new ChunkerEvaluator(chunker);
+////        evaluator.setVerbose(true);
+//        Conll2002ChunkTagParser parser = new Conll2002ChunkTagParser();
+//        parser.setHandler(evaluator);
+//        parser.parse(responseFile);
+//        
+//        System.out.printf("\nLINGPIPE SCORING\n");
+//        System.out.println(evaluator.toString());
+    	break;
+    }
+    default:
+    	break;
+    }
 
   }
 }
